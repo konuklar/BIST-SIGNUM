@@ -349,8 +349,27 @@ st.markdown("""
         box-shadow: var(--shadow-lg);
         backdrop-filter: blur(10px);
     
-        min-width: 320px;
-        max-width: 420px;
+        min-width: 360px;
+        max-width: 520px;
+    }
+
+    /* Ensure sidebar content remains readable and scrollable */
+    section[data-testid="stSidebar"] > div {
+        overflow-y: auto;
+        padding-bottom: 2rem;
+    }
+    section[data-testid="stSidebar"] label,
+    section[data-testid="stSidebar"] .stMarkdown,
+    section[data-testid="stSidebar"] p,
+    section[data-testid="stSidebar"] span,
+    section[data-testid="stSidebar"] div,
+    section[data-testid="stSidebar"] small {
+        color: var(--text-primary) !important;
+    }
+    section[data-testid="stSidebar"] input,
+    section[data-testid="stSidebar"] textarea {
+        color: var(--text-primary) !important;
+        background: var(--bg-tertiary) !important;
     }
     
     section[data-testid="stSidebar"] .stMarkdown,
@@ -3605,11 +3624,9 @@ class AdvancedDataFetcher:
         prices = base_prices[:, None] * np.exp(np.cumsum(correlated_returns, axis=1))
         
         # Create DataFrames
-        price_df = pd.DataFrame(
-            prices.T,
-            index=date_range,
-            columns=tickers
-        )
+        # Defensive alignment to avoid rare index/shape mismatches
+        n = min(len(date_range), prices.T.shape[0])
+        price_df = pd.DataFrame(prices.T[:n], index=date_range[:n], columns=tickers)
         # Returns are derived from prices to guarantee perfect index/shape consistency
         returns_df = price_df.pct_change().dropna()
 # Calculate volumes
@@ -3624,11 +3641,8 @@ class AdvancedDataFetcher:
             price_changes = price_df[ticker].pct_change().abs().fillna(0.0)
             volumes[:, i] = volumes[:, i] * (1 + 0.5 * price_changes.values)
         
-        volume_df = pd.DataFrame(
-            volumes,
-            index=date_range,
-            columns=tickers
-        )
+        n_v = min(len(date_range), volumes.shape[0])
+        volume_df = pd.DataFrame(volumes[:n_v], index=date_range[:n_v], columns=tickers)
         
         # Calculate rolling metrics
         volatility_df = returns_df.rolling(20).std() * np.sqrt(252)
@@ -6875,17 +6889,23 @@ def main():
         )
         
         # Date Range
-        col_date1, col_date2 = st.columns(2)
-        with col_date1:
-            start_date = st.date_input(
-                "Start Date",
-                datetime.now() - timedelta(days=365 * 2),
-                key="start_date_main"
-            )
-        with col_date2:
-            end_date = st.date_input(
-                "End Date",
-                datetime.now(),
+        # Date Range (single widget for readability)
+        date_range = st.date_input(
+            "Date Range",
+            value=(
+                (datetime.now() - timedelta(days=365 * 2)).date(),
+                datetime.now().date()
+            ),
+            key="date_range_main",
+            help="Select start and end dates"
+        )
+        if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+            start_date, end_date = date_range
+        else:
+            start_date = (datetime.now() - timedelta(days=365 * 2)).date()
+            end_date = datetime.now().date()
+
+,
                 key="end_date_main"
             )
         
@@ -7058,8 +7078,23 @@ def main():
             
             # Extract data
             prices = market_data.get('prices')
-            returns = market_data.get('returns')
-            benchmark_data = market_data.get('benchmark_data', {})
+            _returns_from_provider = market_data.get('returns')
+
+            # Recompute returns from prices to guarantee perfect index/shape consistency
+            if prices is None or not isinstance(prices, pd.DataFrame) or prices.empty:
+                raise ValueError("Price dataframe is empty (data provider returned no prices).")
+
+            prices = prices.sort_index()
+            prices = prices.apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan)
+            prices = prices.ffill().bfill()
+
+            # Drop assets with too much missingness (before fill) is handled in the fetcher,
+            # but we keep a final sanity check here.
+            returns = prices.pct_change().dropna(axis=0, how="any")
+
+            if returns.empty or returns.shape[0] < 30:
+                raise ValueError("Insufficient return observations after cleaning. Try a longer date range or fewer assets.")
+benchmark_data = market_data.get('benchmark_data', {})
             fundamental_data = market_data.get('fundamental_data', {})
             
             progress_bar.progress(90)
@@ -7077,11 +7112,24 @@ def main():
                 """)
                 st.stop()
             
-            # Get benchmark returns
-            if benchmark_data and 'returns' in benchmark_data:
-                benchmark_returns = benchmark_data['returns']
-            else:
-                benchmark_returns = pd.DataFrame()  # Empty fallback
+            # Get benchmark returns (prefer recomputed from benchmark prices if available)
+            benchmark_returns = pd.DataFrame()
+            try:
+                if benchmark_data and isinstance(benchmark_data, dict):
+                    if 'prices' in benchmark_data and isinstance(benchmark_data['prices'], pd.DataFrame) and not benchmark_data['prices'].empty:
+                        _bp = benchmark_data['prices'].sort_index()
+                        _bp = _bp.apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).ffill().bfill()
+                        benchmark_returns = _bp.pct_change().dropna(axis=0, how="any")
+                    elif 'returns' in benchmark_data and isinstance(benchmark_data['returns'], (pd.Series, pd.DataFrame)):
+                        # last resort: use provider returns
+                        benchmark_returns = benchmark_data['returns']
+                        if isinstance(benchmark_returns, pd.Series):
+                            benchmark_returns = benchmark_returns.to_frame(name="benchmark")
+                        benchmark_returns = benchmark_returns.apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+            except Exception as e:
+                logger.warning(f"Benchmark return preparation failed; continuing with empty benchmark. Reason: {e}")
+                benchmark_returns = pd.DataFrame()
+
             
             progress_bar.progress(100)
             status_text.text("Data ready!")
@@ -7826,22 +7874,7 @@ def main():
 if __name__ == "__main__":
     try:
         # Optional dependency diagnostics (quiet; shown only in Sidebar → Diagnostics)
-        missing_packages = []
-        if not HAS_ARCH:
-            missing_packages.append("arch")
-        if not HAS_SKLEARN:
-            missing_packages.append("scikit-learn")
-        if not HAS_XGBOOST:
-            missing_packages.append("xgboost")
-        if not HAS_REPORTLAB:
-            missing_packages.append("reportlab")
-
-        if missing_packages:
-            with st.sidebar.expander("Diagnostics", expanded=False):
-                st.warning("Optional packages not installed: " + ", ".join(missing_packages))
-                st.code("pip install " + " ".join(missing_packages))
-
-
+        # Diagnostics panel removed (keep UI clean on Streamlit Cloud)
         # Run main application
         main()
         
