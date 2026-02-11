@@ -6905,9 +6905,6 @@ def main():
             start_date = (datetime.now() - timedelta(days=365 * 2)).date()
             end_date = datetime.now().date()
 
-,
-                key="end_date_main"
-            )
         
         # Asset Selection
         st.markdown("<div class='section-header'>Asset Selection</div>", unsafe_allow_html=True)
@@ -6961,7 +6958,7 @@ def main():
         )
         
         # Advanced Parameters
-        with st.expander("⚡ Advanced Parameters", icon="⚡"):
+        with st.expander("⚡ Advanced Parameters"):
             # Transaction Costs
             st.markdown("**Transaction Costs**")
             transaction_cost = st.slider(
@@ -7094,7 +7091,7 @@ def main():
 
             if returns.empty or returns.shape[0] < 30:
                 raise ValueError("Insufficient return observations after cleaning. Try a longer date range or fewer assets.")
-benchmark_data = market_data.get('benchmark_data', {})
+            benchmark_data = market_data.get('benchmark_data', {})
             fundamental_data = market_data.get('fundamental_data', {})
             
             progress_bar.progress(90)
@@ -7701,7 +7698,7 @@ benchmark_data = market_data.get('benchmark_data', {})
         )
     
     # Compliance summary
-    with st.expander("📋 Detailed Compliance Report", icon="📋"):
+    with st.expander("📋 Detailed Compliance Report"):
         st.markdown("##### Regulatory Compliance Status")
         
         compliance_data = []
@@ -7890,7 +7887,7 @@ if __name__ == "__main__":
         """)
         
         # Show detailed error in expander
-        with st.expander("🔧 Technical Details & Troubleshooting", icon="🔧"):
+        with st.expander("🔧 Technical Details & Troubleshooting"):
             st.code(traceback.format_exc())
             
             st.markdown("""
