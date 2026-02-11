@@ -5179,9 +5179,21 @@ class AdvancedVisualizationEngine:
     """
     
     def __init__(self):
-        self.theme = PLOTLY_THEME
+        # NOTE: PLOTLY_THEME contains a top-level 'title' dict for styling.
+        # Passing fig.update_layout(title='... ', **theme) would then send 'title' twice,
+        # causing: Figure.update_layout() got multiple values for keyword argument 'title'.
+        # We keep the styling by moving title font to 'title_font' and removing 'title' from theme.
+        base_theme = dict(PLOTLY_THEME) if isinstance(PLOTLY_THEME, dict) else {}
+        try:
+            title_font = base_theme.get('title', {}).get('font', None)
+        except Exception:
+            title_font = None
+        if title_font:
+            base_theme['title_font'] = title_font
+        base_theme.pop('title', None)
+        self.theme = base_theme
         self.palette = PALETTE
-        
+
     def plot_efficient_frontier_3d(self, optimizer: AdvancedPortfolioOptimizer,
                                   risk_free_rate: float) -> go.Figure:
         """Create 3D efficient frontier visualization"""
